@@ -1,0 +1,23 @@
+# Secrets
+.env
+*.env.local
+
+# Backend
+backend/node_modules/
+backend/dist/
+
+# Android
+android/.gradle/
+android/build/
+android/app/build/
+android/local.properties
+android/.idea/
+android/captures/
+*.iml
+.externalNativeBuild/
+.cxx/
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
