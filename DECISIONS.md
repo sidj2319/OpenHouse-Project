@@ -15,10 +15,53 @@
 | Currency | The Fake Store API gives bare numbers; shown as USD. |
 | Platforms | Android only, minSdk 26, portrait phone layout. Tablet and landscape polish not attempted. |
 
+## Android client: decisions and assumptions
+
+### Stack choices
+| Area | Choice | Why |
+|---|---|---|
+| Language / UI | Kotlin, Jetpack Compose, Material 3 | Less boilerplate than XML views, and the theme is a single swappable file. |
+| Architecture | Screen (composable) -> ViewModel -> `CatalogueRepository` interface -> Retrofit API | Each layer has one job. Screens hold no logic, ViewModels hold state and rules, the repository hides the network. |
+| State | `StateFlow` per ViewModel, exposed as `UiState` (`Loading` / `Error` / `Success`) | One small, consistent pattern on every screen, so loading, error and retry behave the same everywhere. |
+| Networking | Retrofit + OkHttp + kotlinx.serialization | Standard, small, and `ignoreUnknownKeys` lets the backend add fields without breaking the app. |
+| Images | Coil | Compose-native; handles caching and loading without custom code. |
+| Navigation | Navigation Compose, one route per screen (home, category, search, product, enquiry) | Back stack and the system back button work without extra code. |
+| Dependency injection | Hand-written `AppContainer` | Five screens do not justify Hilt. It can be swapped in later without touching screens. |
+| SDK levels | minSdk 26, target/compile 34 | Covers the vast majority of active devices and avoids legacy workarounds. |
+
+### Assumptions
+| Gap | Assumption |
+|---|---|
+| Screen set | Five screens map one-to-one to the acceptance criteria: Home, Category, Search results, Product details, Enquiry (the form turns into the Thank-you view in place). |
+| Home layout | Category chips in a row, then the 5 featured products ("Top rated") in a 2-column grid. The search bar sits above, so search is reachable from home. |
+| Category page | Two sections: "Top rated in X" then "More in X". The "More" section is hidden when the category has no extra products. |
+| Search | Results open on their own screen. The search bar stays visible there so the customer can refine the term. An empty result shows "No products match ...". |
+| Product tile | Image, title (2 lines max), price and rating. Tapping anywhere on the tile opens details. |
+| Enquire flow | The Enquire button is on the product page. The form shows the product title so the customer knows what they are enquiring about. If the title fails to load, the form still works. |
+| Validation | The app validates name, email, phone and message length for fast feedback, but the backend re-validates everything and is the source of truth. Rules are kept in sync by hand (noted in `EnquiryValidator`). |
+| Submit behaviour | The button is disabled while sending to prevent double-submits. The Thank-you view appears only after the backend confirms success. On failure the customer sees an error and keeps what they typed. |
+| Rotation / process death | ViewModels survive rotation, so form input and loaded data are kept. Full recovery after the system kills the app is not handled: the user returns to the home screen. |
+| Language / formatting | English only, prices shown as USD (`$12.99`), category names title-cased for display (`men's clothing` -> `Men's Clothing`). |
+| Server address | Set at build time through `apiBaseUrl` in `android/gradle.properties`, defaulting to `10.0.2.2:3000` (the emulator's alias for the host PC). A real phone needs the PC's LAN IP. |
+| Offline | Not supported. A failed request shows a clear message and a "Try again" button. |
+
+### Android-specific trade-offs
+- **ViewModel per navigation entry, no shared cache.** Going back to home refetches. This costs an extra request but avoids stale data and cache-invalidation logic. The backend caches the upstream, so it is cheap.
+- **Customer-facing errors are mapped in one place** (`safeCall` in the repository): network failure, 400/404/429/5xx and unknown errors each get a friendly message. Raw exception text is never shown, so no internals leak. Coroutine cancellation is deliberately re-thrown, not swallowed.
+- **Cleartext HTTP is allowed only for `10.0.2.2` and `localhost`** through the network security config. All other traffic must be HTTPS. For a LAN IP during device testing the address must be added to that file, and the exception removed once the backend has TLS.
+- **No design system beyond Material 3 defaults.** The creative work is not available yet, so I kept visual decisions minimal and isolated in `ui/theme/Theme.kt` and `ui/common`.
+- **Search is a plain submit, not as-you-type.** It matches the acceptance criteria ("click the search button") and avoids debouncing and request cancellation logic.
+
+### Testing approach on Android
+- Unit tests (JUnit, fake repository, no emulator) cover: Home, Category and Search ViewModels, the enquiry ViewModel (validation, trimming, success, failure keeping the form, error clearing on edit), the validator, and the repository's error mapping.
+- Composables are kept thin on purpose so most behaviour is testable without a UI framework.
+- **Honest status:** I generated this module in an environment without the Android SDK, so I did not compile it or run its tests there. Treat the first Android Studio build as part of the review and see `AI_USAGE.md` for any fixes made.
+
 ## Requirements dropped or simplified
 - **No persistence of enquiries.** They only go to email. Cheap to add via a repository, but not required by the criteria, and a database adds setup for the reviewer. If SMTP is down the enquiry is lost, which is the biggest known gap (see next steps).
 - **No pagination.** Fake Store has 20 products. The service and API are shaped so it can be added.
 - **No instrumented/UI tests on Android.** Time-box. Logic lives in ViewModels and a validator, which are unit-tested; composables are thin.
+- **No state restoration after process death, no tablet/landscape layouts, no localisation, no dark-theme polish** on Android. None are in the acceptance criteria.
 - **No CI, no deployment config.** The Dockerfile is AWS-compatible (runs as-is on ECS/Fargate), but I did not write Terraform/CDK.
 - **No image caching tuning or offline mode.** Coil's defaults apply.
 - **Basic accessibility only** (content descriptions on images). No full audit.
@@ -45,3 +88,4 @@
 5. CI (backend tests + `testDebugUnitTest`), a deployed backend on AWS with TLS, and removal of the cleartext exception.
 6. Structured logging with request IDs, and a customer confirmation email.
 7. An admin way to choose featured products instead of an env var.
+8. Android: restore state after process death (`SavedStateHandle`), a short-lived in-memory cache so back navigation is instant, Hilt if the app grows past a handful of screens, accessibility pass (TalkBack, touch targets), and a release build config with minification and signing.
